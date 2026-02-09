@@ -3,121 +3,115 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import time
-import json
 from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Extractor Médico Pro", page_icon="🩺", layout="wide")
+# --- CONFIGURACIÓN E INTERFAZ ---
+st.set_page_config(page_title="Extractor Médico Universal", page_icon="🌐", layout="wide")
 
-# Diseño profesional claro con texto en negrita
 st.markdown("""
     <style>
     .main { background-color: #ffffff; }
-    h1, h2, h3 { color: #1e293b; font-weight: bold; }
-    b, strong { color: #1e293b; }
-    .stButton>button { background-color: #2563eb; color: white; font-weight: bold; border-radius: 8px; width: 100%; }
+    h1, h2, b, strong { color: #0f172a; font-weight: bold; }
+    .stButton>button { background-color: #0284c7; color: white; font-weight: bold; border-radius: 10px; border: none; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 Extractor Médico Universal v10.0 (Edición Web)")
-st.markdown("**Bienvenido.** Esta versión está optimizada para ejecutarse desde la nube y generar archivos limpios.")
+st.title("🌐 Extractor de Datos Médico & Universal")
 
-# --- FUNCIONES TÉCNICAS (Sin Tkinter) ---
-def limpiar_excel_en_memoria(df):
-    """Aplica formato profesional al Excel directamente en la RAM."""
+# --- BARRA LATERAL: SELECTOR DE MODO ---
+with st.sidebar:
+    st.header("⚙️ Configuración del Minero")
+    modo = st.selectbox(
+        "Selecciona el objetivo:",
+        ["MedlinePlus (A-Z)", "Mayo Clinic (A-Z)", "Modo Universal (Cualquier URL)"]
+    )
+    st.divider()
+    st.info("El **Modo Universal** intentará extraer el texto principal de cualquier página que le proporciones.")
+
+# --- FUNCIONES DE EXTRACCIÓN INTELIGENTE ---
+def limpiar_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Resultados')
-        ws = writer.sheets['Resultados']
-        
-        # Ajustes de columna
-        ws.column_dimensions['A'].width = 10
+        df.to_excel(writer, index=False, sheet_name='Datos')
+        ws = writer.sheets['Datos']
         ws.column_dimensions['B'].width = 35
-        ws.column_dimensions['C'].width = 100
-        ws.column_dimensions['D'].width = 40
-        
+        ws.column_dimensions['C'].width = 90
         for row in ws.iter_rows():
             for cell in row:
                 cell.alignment = Alignment(wrap_text=True, vertical='top')
-                if cell.row == 1:
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+                if cell.row == 1: cell.font = Font(bold=True)
     return output.getvalue()
 
-def obtener_texto(url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0'}
+def extraer_cuerpo_universal(url):
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            s = BeautifulSoup(r.content, 'html.parser')
-            cuerpo = s.find('div', id="topic-summary") or s.find('div', class_="main")
-            if cuerpo:
-                parrafos = [p.get_text(strip=True) for p in cuerpo.find_all('p') if len(p.get_text()) > 30]
-                return "\n\n".join(parrafos)
+        soup = BeautifulSoup(r.content, 'html.parser')
+        # Buscamos en etiquetas comunes de contenido
+        contenedor = soup.find('article') or soup.find('main') or soup.find('div', class_='content')
+        if not contenedor: contenedor = soup.body
+        
+        parrafos = [p.get_text(strip=True) for p in contenedor.find_all('p') if len(p.get_text()) > 40]
+        return "\n\n".join(parrafos)
     except: return None
-    return None
 
-# --- INTERFAZ DE USUARIO ---
-url_input = st.text_input("URL de inicio (Índice A-Z):", "https://medlineplus.gov/spanish/healthtopics.html")
+# --- LÓGICA POR MODOS ---
+if modo == "MedlinePlus (A-Z)":
+    url_base = "https://medlineplus.gov/spanish/healthtopics_"
+    selector_enlaces = 'section li a'
+    suffix = ".html"
+elif modo == "Mayo Clinic (A-Z)":
+    url_base = "https://www.mayoclinic.org/es/diseases-conditions/index?letter="
+    selector_enlaces = '.index ol li a'
+    suffix = ""
+else:
+    url_base = st.text_input("Introduce URL para extraer:", "https://ejemplo.com/articulo")
 
-if st.button("🚀 INICIAR EXTRACCIÓN"):
-    base_url = "https://medlineplus.gov/spanish/healthtopics_"
-    letras = "abcdefghijklmnopqrstuvw"
-    datos_finales = []
-    
+if st.button("🚀 INICIAR MINERÍA"):
+    datos = []
     progreso = st.progress(0)
     status = st.empty()
-    
-    # Bucle de extracción
-    for i, letra in enumerate(letras):
-        status.markdown(f"🔍 Procesando letra: **{letra.upper()}**")
-        try:
-            r = requests.get(f"{base_url}{letra}.html", timeout=10)
-            soup = BeautifulSoup(r.content, 'html.parser')
-            enlaces = soup.select('section li a')
-            
-            for enlace in enlaces:
-                nombre = enlace.get_text(strip=True)
-                href = enlace.get('href', '')
-                if "/spanish/" in href and "healthtopics" not in href:
-                    url_tema = f"https://medlineplus.gov{href}" if href.startswith('/') else href
-                    texto = obtener_texto(url_tema)
-                    if texto:
-                        datos_finales.append({
-                            "Letra": letra.upper(),
-                            "Tema": nombre,
-                            "Contenido": texto,
-                            "URL": url_tema
-                        })
-        except: continue
-        
-        progreso.progress((i + 1) / len(letras))
-    
-    if datos_finales:
-        df = pd.DataFrame(datos_finales)
-        st.success(f"✅ ¡Extracción completa! Se han encontrado {len(datos_finales)} temas.")
-        
-        st.subheader("📊 Previsualización de Datos")
-        st.dataframe(df.head(10), use_container_width=True)
 
-        # Botones de descarga
-        col1, col2 = st.columns(2)
-        with col1:
-            excel_limpio = limpiar_excel_en_memoria(df)
-            st.download_button(
-                label="📥 Descargar EXCEL FORMATEADO",
-                data=excel_limpio,
-                file_name="medicina_limpia.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        with col2:
-            st.download_button(
-                label="📄 Descargar JSON",
-                data=df.to_json(orient="records", force_ascii=False, indent=4),
-                file_name="medicina_data.json",
-                mime="application/json"
-            )
+    if "A-Z" in modo:
+        letras = "abcdefghijklmnopqrstuvw"
+        for i, letra in enumerate(letras):
+            status.markdown(f"🔍 Escaneando letra: **{letra.upper()}**")
+            target = f"{url_base}{letra}{suffix}"
+            try:
+                r = requests.get(target, timeout=10)
+                soup = BeautifulSoup(r.content, 'html.parser')
+                enlaces = soup.select(selector_enlaces)
+                
+                for link in enlaces[:15]: # Limitamos a 15 por letra para velocidad en la web
+                    nombre = link.get_text(strip=True)
+                    href = link.get('href')
+                    if href:
+                        full_url = href if href.startswith('http') else f"https://www.mayoclinic.org{href}" if "mayo" in modo.lower() else f"https://medlineplus.gov{href}"
+                        texto = extraer_cuerpo_universal(full_url)
+                        if texto:
+                            datos.append({"Letra": letra.upper(), "Tema": nombre, "Contenido": texto, "URL": full_url})
+            except: continue
+            progreso.progress((i + 1) / len(letras))
     else:
-        st.error("No se pudieron extraer datos. Revisa la URL.")
+        # MODO UNIVERSAL
+        status.markdown(f"🔍 Extrayendo datos de: **{url_base}**")
+        texto = extraer_cuerpo_universal(url_base)
+        if texto:
+            datos.append({"Tema": "Extracción Manual", "Contenido": texto, "URL": url_base})
+        progreso.progress(100)
+
+    if datos:
+        df = pd.DataFrame(datos)
+        st.success("✅ ¡Proceso finalizado!")
+        st.dataframe(df.head(20), use_container_width=True)
+        
+        st.download_button(
+            "📥 Descargar EXCEL ORGANIZADO",
+            data=limpiar_excel(df),
+            file_name="extraccion_medica_pro.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.error("No se encontraron datos. Verifica la conexión o la URL.")
